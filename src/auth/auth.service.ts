@@ -78,28 +78,81 @@ export class AuthService {
     });
     return tokens;
   }
-  
+
+  async signIn(
+    email: string,
+    password: string,
+    res: Response,
+  ): Promise<Tokens> {
+    const user = await this.prismaService.user.findUnique({
+      where: {
+        email: email ,
+      },
+    });
+
+    if (!user) {
+      throw new BadRequestException('Invalid email or password');
+    }
+
+    const passwordMatch = await bcrypt.compare(password, user.hashedPassword);
+
+    if (!passwordMatch) {
+      throw new BadRequestException('Invalid email or password');
+    }
+
+    const tokens = await this.getTokens(user.id, user.email);
+    await this.updateRefreshToken(user.id, tokens.refresh_token);
+
+    res.cookie('refresh_token', tokens.refresh_token, {
+      maxAge: Number(process.env.COOKIE_TIME),
+      httpOnly: true,
+    });
+
+    return tokens;
+  }
+
+async signout(refreshToken:string,res:Response){
+    const userData=await this.jwtService.verify(refreshToken,{
+      secret:process.env.REFRESH_TOKEN_KEY,
+    });
+    if(!userData){
+      throw new ForbiddenException('Refresh token is invalid');
+    }
+    const updateUser=await this.prismaService.update({
+      hashed_refresh_token:null,
+    },
+    {
+      where:{id:userData.id},
+      returning:true,
+    })
+    res.clearCookie('refresh_token');
+    const response={
+      message:"user logout successfully",
+      user_refresh_token:updateUser[1][0].hashed_refresh_token
+    }
+    }
+ 
   async refreshToken(userId:number,refreshToken:string,res:Response){
         const decodedToken=await this.jwtService.decode(refreshToken)
         if(userId!==decodedToken['id']){
           throw new BadRequestException('Refresh token is invalid');
         }
-  
-        const user=await this.prismaService.findBy({where:{id:userId}});
-  
-        if(!user||!user.hashed_refresh_token){
+
+        const user=await this.prismaService.findOne({where:{id:userId}});
+
+        if(!user||!user.hashedRefreshToken){
           throw new BadRequestException('user does not exist');
         }
-  
+
         const tokenMatch=await bcrypt.compare(
           refreshToken,
           user.hashed_refresh_token
         );
-  
+
         if(!tokenMatch){
           throw new ForbiddenException('Forbidden');
         }
-  
+
       const tokens = await this.getTokens(user.id,user.email);
       const hashed_refresh_token = await bcrypt.hash(tokens.refresh_token, 7);
       const updatedUser = await this.prismaService.update(
